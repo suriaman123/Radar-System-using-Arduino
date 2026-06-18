@@ -18,8 +18,6 @@ In this mode, both servo motors move simultaneously.
 
 Note: The Arduino code works, but the web application currently does not support this mode properly.
 
----
-
 ### 2. Servo Working Separately
 
 In this mode, the servos scan sequentially.
@@ -30,6 +28,7 @@ Scanning sequence:
 3. The cycle repeats continuously
 
 This creates a wider scanning range while reducing simultaneous sensor operations.
+
 
 ## Web Application
 The radar visualization interface was generated using **Google Gemini AI**.
