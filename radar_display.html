@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>360° Radar</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #060e08;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    font-family: 'Courier New', monospace;
+    color: #00ff41;
+    padding: 20px;
+  }
+  canvas {
+    width:  min(90vw, 90vh, 540px);
+    height: min(90vw, 90vh, 540px);
+    border-radius: 50%;
+    display: block;
+  }
+  #controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  button {
+    padding: 8px 20px;
+    background: transparent;
+    border: 1px solid #00ff4155;
+    color: #00ff41;
+    font-family: inherit;
+    font-size: 12px;
+    letter-spacing: 2px;
+    cursor: pointer;
+    border-radius: 3px;
+  }
+  button:hover { border-color: #00ff41; background: #00ff4110; }
+  #status { font-size: 11px; letter-spacing: 2px; opacity: 0.4; }
+  label { font-size: 11px; opacity: 0.5; letter-spacing: 1px; }
+  input[type=range] {
+    -webkit-appearance: none;
+    width: 90px; height: 2px;
+    background: #00ff4130;
+    outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    background: #00ff41;
+    cursor: pointer;
+  }
+  #range-val { font-size: 11px; opacity: 0.5; min-width: 40px; }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="controls">
+  <button id="btn" onclick="connect()">Connect</button>
+  <label>Range</label>
+  <input type="range" id="rng" min="10" max="200" value="50" step="1"
+         oninput="MAX=+this.value; document.getElementById('range-val').textContent=this.value+'cm'">
+  <span id="range-val">50cm</span>
+</div>
+<div id="status">disconnected</div>
+
+<script>
+let MAX = 50, sweepAngle = 0, blips = [];
+let port, reader;
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+function resize() { canvas.width = canvas.height = canvas.clientWidth; }
+window.addEventListener('resize', resize);
+resize();
+
+function draw() {
+  requestAnimationFrame(draw);
+  const now = Date.now();
+  const S = canvas.width, cx = S/2, cy = S/2, R = cx - 14;
+
+  ctx.fillStyle = 'rgba(6,14,8,0.13)';
+  ctx.fillRect(0, 0, S, S);
+
+  // Grid rings
+  ctx.strokeStyle = '#003a10';
+  ctx.lineWidth = 0.5;
+  [0.33, 0.66, 1].forEach(f => {
+    ctx.beginPath(); ctx.arc(cx, cy, R*f, 0, Math.PI*2); ctx.stroke();
+  });
+
+  // Spokes every 45°
+  for (let d = 0; d < 360; d += 45) {
+    const r = (d - 90) * Math.PI / 180;
+    ctx.beginPath(); ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + R*Math.cos(r), cy + R*Math.sin(r)); ctx.stroke();
+  }
+
+  // Cardinal labels
+  ctx.fillStyle = '#00602088'; ctx.font = `${Math.max(10, S*0.025)}px Courier New`;
+  ctx.textAlign = 'center';
+  [['N',0],['E',90],['S',180],['W',270]].forEach(([l,d]) => {
+    const r = (d-90)*Math.PI/180;
+    ctx.fillText(l, cx+(R+11)*Math.cos(r), cy+(R+11)*Math.sin(r)+4);
+  });
+
+  // Sweep trail
+  const sr = (sweepAngle - 90) * Math.PI / 180;
+  const span = 22 * Math.PI / 180;
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+  g.addColorStop(0,   'rgba(0,255,65,0)');
+  g.addColorStop(1,   'rgba(0,255,65,0.14)');
+  ctx.save();
+  ctx.beginPath(); ctx.moveTo(cx, cy);
+  ctx.arc(cx, cy, R, sr - span, sr);
+  ctx.closePath(); ctx.fillStyle = g; ctx.fill();
+  ctx.restore();
+
+  // Sweep line
+  ctx.strokeStyle = '#00ff41'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + R*Math.cos(sr), cy + R*Math.sin(sr)); ctx.stroke();
+
+  // Blips
+  blips = blips.filter(b => now - b.ts < 3000);
+  blips.forEach(b => {
+    const a = 1 - (now - b.ts) / 3000;
+    const br = (b.angle - 90) * Math.PI / 180;
+    const r  = Math.min(b.dist / MAX, 1) * R;
+    const bx = cx + r * Math.cos(br), by = cy + r * Math.sin(br);
+    const col = b.sensor === 'A' ? `rgba(0,255,65,${a})` : `rgba(0,200,255,${a})`;
+    ctx.beginPath(); ctx.arc(bx, by, 4, 0, Math.PI*2);
+    ctx.fillStyle = col; ctx.fill();
+    ctx.fillStyle = col;
+    ctx.font = `${Math.max(9,S*0.02)}px Courier New`;
+    ctx.textAlign = 'left';
+    ctx.fillText(b.dist+'cm', bx+6, by-4);
+  });
+
+  // Centre
+  ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI*2);
+  ctx.fillStyle = '#00ff41'; ctx.fill();
+}
+
+// Serial
+async function connect() {
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 9600 });
+    document.getElementById('status').textContent = 'connected';
+    document.getElementById('btn').textContent = 'Disconnect';
+    document.getElementById('btn').onclick = disconnect;
+    readLoop();
+  } catch(e) { document.getElementById('status').textContent = 'error: '+e.message; }
+}
+async function disconnect() {
+  if (reader) { await reader.cancel(); reader = null; }
+  if (port)   { await port.close();   port   = null; }
+  document.getElementById('status').textContent = 'disconnected';
+  document.getElementById('btn').textContent = 'Connect';
+  document.getElementById('btn').onclick = connect;
+}
+async function readLoop() {
+  const dec = new TextDecoderStream();
+  port.readable.pipeTo(dec.writable);
+  reader = dec.readable.getReader();
+  let buf = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let nl;
+      while ((nl = buf.indexOf('\n')) !== -1) {
+        parse(buf.slice(0, nl).trim()); buf = buf.slice(nl+1);
+      }
+    }
+  } catch(e) { if (e.name !== 'AbortError') console.error(e); }
+}
+function parse(line) {
+  const p = line.split(',');
+  if (p.length !== 3) return;
+  const sensor = p[0], angle = +p[1], dist = +p[2];
+  if (isNaN(angle)||isNaN(dist)) return;
+  sweepAngle = angle;
+  if (dist > 0 && dist < MAX) blips.push({ sensor, angle, dist, ts: Date.now() });
+}
+
+// Demo
+let da = 0;
+setInterval(() => {
+  if (port) return;
+  da = (da + 3) % 360;
+  sweepAngle = da;
+  if (Math.abs(da - 50)  < 4) blips.push({ sensor:'A', angle:50,  dist:20, ts:Date.now() });
+  if (Math.abs(da - 230) < 4) blips.push({ sensor:'B', angle:230, dist:33, ts:Date.now() });
+}, 30);
+
+draw();
+</script>
+</body>
+</html>
